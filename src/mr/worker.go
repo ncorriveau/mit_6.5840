@@ -1,41 +1,50 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
+import (
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net/rpc"
+)
 
-
-//
 // Map functions return a slice of KeyValue.
-//
 type KeyValue struct {
 	Key   string
 	Value string
 }
 
-//
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
-//
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
-//
 // main/mrworker.go calls this function.
-//
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
 	// Your worker implementation here.
-
+	// loop and ask for tasks from the coordinator
+	// and execute them
+	// save down and alert to coordinator when done
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
+	_, myTask := GetTask(1)
+	log.Print("Got task")
+	if mt, ok := myTask.Task.(mapTask); ok {
+		fmt.Println(mt.Name)
+	}
 
+}
+
+func GetTask(id int) (bool, TaskResponse) {
+	args := TaskRequest{WorkerID: id}
+	reply := TaskResponse{} // set with default values
+	log.Print("Calling Coordinator.AssignTask")
+	ok := call("Coordinator.AssignTask", &args, &reply)
+	// TODO add some error handling probably
+	return ok, reply
 }
 
 //
@@ -43,6 +52,7 @@ func Worker(mapf func(string, string) []KeyValue,
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
+
 func CallExample() {
 
 	// declare an argument structure.
@@ -67,11 +77,9 @@ func CallExample() {
 	}
 }
 
-//
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
-//
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := coordinatorSock()
