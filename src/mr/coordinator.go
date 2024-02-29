@@ -31,6 +31,7 @@ func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 	// assign a task to the worker
 	// if there are no tasks left, return an error
 	// else return the task
+	log.Printf("Assigning task to worker %d", args.WorkerID)
 	for i, task := range c.MapTasks {
 		if task.Status == "idle" {
 			c.MapTasks[i].Status = "in-progress"
@@ -81,10 +82,18 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
+	log.Printf("nReduce = %d", nReduce)
 	// Your code here.
-	for _, file := range files {
-		c.MapTasks = append(c.MapTasks, mapTask{Name: file, Status: "idle",
-			Worker: 0, StartTime: 0, OutputFilename: ""})
+	for i, file := range files {
+		c.MapTasks = append(c.MapTasks, mapTask{
+			FileName:       file,
+			TaskNumber:     i,
+			NReduce:        nReduce,
+			Status:         "idle",
+			Worker:         0,
+			StartTime:      0,
+			OutputFilename: "",
+		})
 	}
 
 	c.server()

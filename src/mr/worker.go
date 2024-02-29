@@ -1,10 +1,13 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"net/rpc"
+	"os"
 )
 
 // Map functions return a slice of KeyValue.
@@ -22,19 +25,68 @@ func ihash(key string) int {
 }
 
 // main/mrworker.go calls this function.
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
+func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 	// Your worker implementation here.
 	// loop and ask for tasks from the coordinator
 	// and execute them
 	// save down and alert to coordinator when done
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
+
+	var nReduce, taskNum int
+
+	intermediate := []KeyValue{}
 	_, myTask := GetTask(1)
 	log.Print("Got task")
+
 	if mt, ok := myTask.Task.(mapTask); ok {
-		fmt.Println(mt.Name)
+		nReduce = mt.NReduce
+		taskNum = mt.TaskNumber
+
+		file, err := os.Open(mt.FileName)
+		if err != nil {
+			log.Fatalf("cannot open %v", mt.FileName)
+		}
+		content, err := io.ReadAll(file)
+		if err != nil {
+			log.Fatalf("cannot read %v", mt.FileName)
+		}
+		file.Close()
+		kva := mapf(mt.FileName, string(content))
+		intermediate = append(intermediate, kva...)
 	}
+
+	// loop thru k,v pairs and write
+	fileDescriptors := make(map[int]*os.File)
+	for _, kv := range intermediate {
+		reduceNumber := ihash(kv.Key) % nReduce
+		filename := fmt.Sprintf("mr-%d-%d", taskNum, reduceNumber)
+
+		if _, ok := fileDescriptors[reduceNumber]; !ok {
+			file, err := os.Create(filename)
+			if err != nil {
+				log.Fatalf("cannot create %v", filename)
+			}
+			fileDescriptors[reduceNumber] = file
+		}
+
+		// Write the key-value pair to the appropriate file
+		enc := json.NewEncoder(fileDescriptors[reduceNumber])
+		err := enc.Encode(&kv)
+		if err != nil {
+			fmt.Println("Error writing to file:", err)
+			return
+		}
+	}
+	// Close all the files
+	for _, file := range fileDescriptors {
+		err := file.Close()
+		if err != nil {
+			fmt.Println("Error closing file:", err)
+		}
+	}
+	log.Print("Finished writing files")
+	// call coordinator to say done and send filename
 
 }
 

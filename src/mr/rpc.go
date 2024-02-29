@@ -35,7 +35,9 @@ type TaskResponse struct {
 }
 
 type mapTask struct {
-	Name           string // file name
+	FileName       string // file name
+	TaskNumber     int    // task number
+	NReduce        int    // number of reduce tasks
 	Status         string // 'idle', 'in-progress', 'completed'
 	Worker         int    // pid of worker process handling. 0 if not assigned
 	StartTime      int64  // time task was assigned
@@ -43,10 +45,11 @@ type mapTask struct {
 }
 
 type reduceTask struct {
-	Name      string // file name
-	Status    string // 'idle', 'in-progress', 'completed'
-	Worker    int    // pid of worker process handling. 0 if not assigned
-	StartTime int64  // time task was assigned
+	Name       string // file name
+	TaskNumber int    // task number
+	Status     string // 'idle', 'in-progress', 'completed'
+	Worker     int    // pid of worker process handling. 0 if not assigned
+	StartTime  int64  // time task was assigned
 }
 
 // Cook up a unique-ish UNIX-domain socket name
