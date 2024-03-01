@@ -21,10 +21,10 @@ type Coordinator struct {
 // an example RPC handler.
 //
 // the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
+// func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
+// 	reply.Y = args.X + 1
+// 	return nil
+// }
 
 func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 	// assign a task to the worker
@@ -35,7 +35,6 @@ func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 		if task.Status == "idle" {
 			c.MapTasks[i].Status = "in-progress"
 			c.MapTasks[i].Worker = args.WorkerID
-			c.MapTasks[i].StartTime = 0
 			reply.Task = task
 			return nil
 		}
@@ -44,7 +43,6 @@ func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 		if task.Status == "idle" {
 			c.ReduceTasks[i].Status = "in-progress"
 			c.ReduceTasks[i].Worker = args.WorkerID
-			c.ReduceTasks[i].StartTime = 0
 			reply.Task = task
 			return nil
 		}
@@ -61,6 +59,13 @@ func (c *Coordinator) TaskDone(args *TaskDoneRequest, reply *TaskDoneResponse) e
 			log.Printf("Tasks completed: %d", c.mapDone)
 			return nil
 		}
+	}
+	return nil
+}
+
+func (c *Coordinator) AllDone(args *AllDoneRequest, reply *AllDoneResponse) error {
+	if c.mapDone == len(c.MapTasks) {
+		reply.Success = true
 	}
 	return nil
 }
@@ -85,6 +90,15 @@ func (c *Coordinator) Done() bool {
 	ret := false
 
 	// Your code here.
+	// for right now we will just use numer of map tasks
+	// TODO: add in reduce tasks
+	log.Printf("Checking if all tasks done")
+	log.Printf("Map tasks: %d", len(c.MapTasks))
+	log.Printf("Map done: %d", c.mapDone)
+
+	if c.mapDone == len(c.MapTasks) {
+		ret = true
+	}
 
 	return ret
 }
@@ -94,17 +108,14 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
-	log.Printf("nReduce = %d", nReduce)
 	// Your code here.
 	for i, file := range files {
 		c.MapTasks = append(c.MapTasks, mapTask{
-			FileName:       file,
-			TaskNumber:     i,
-			NReduce:        nReduce,
-			Status:         "idle",
-			Worker:         0,
-			StartTime:      0,
-			OutputFilename: "",
+			FileName:   file,
+			TaskNumber: i,
+			NReduce:    nReduce,
+			Status:     "idle",
+			Worker:     0,
 		})
 	}
 

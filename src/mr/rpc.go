@@ -17,13 +17,13 @@ import (
 // and reply for an RPC.
 //
 
-type ExampleArgs struct {
-	X int
-}
+// type ExampleArgs struct {
+// 	X int
+// }
 
-type ExampleReply struct {
-	Y int
-}
+// type ExampleReply struct {
+// 	Y int
+// }
 
 // Add your RPC definitions here.
 type TaskRequest struct {
@@ -35,8 +35,8 @@ type TaskResponse struct {
 }
 
 type TaskDoneRequest struct {
-	WorkerID       int    // pid of worker process
-	TaskNumber     int    // task number
+	WorkerID        int      // pid of worker process
+	TaskNumber      int      // task number
 	OutputFilenames []string // file location of intermediate outputs
 }
 
@@ -44,14 +44,21 @@ type TaskDoneResponse struct {
 	Success bool
 }
 
+type AllDoneRequest struct {
+	WorkerID int
+}
+
+type AllDoneResponse struct {
+	Success bool
+}
+
 type mapTask struct {
-	FileName       string // file name
-	TaskNumber     int    // task number
-	NReduce        int    // number of reduce tasks
-	Status         string // 'idle', 'in-progress', 'completed'
-	Worker         int    // pid of worker process handling. 0 if not assigned
-	StartTime      int64  // time task was assigned
-	OutputFilename string // file name for intermediate output
+	FileName   string // file name
+	TaskNumber int    // task number
+	NReduce    int    // number of reduce tasks
+	Status     string // 'idle', 'in-progress', 'completed'
+	Worker     int    // pid of worker process handling. 0 if not assigned
+	// potentiall add start time and end time
 }
 
 type reduceTask struct {
@@ -59,7 +66,6 @@ type reduceTask struct {
 	TaskNumber int    // task number
 	Status     string // 'idle', 'in-progress', 'completed'
 	Worker     int    // pid of worker process handling. 0 if not assigned
-	StartTime  int64  // time task was assigned
 }
 
 // Cook up a unique-ish UNIX-domain socket name

@@ -35,66 +35,74 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	workerId := os.Getpid()
 	intermediate := []KeyValue{}
 
-	_, myTask := GetTask(workerId)
-	log.Print("Got task")
-
-	if mt, ok := myTask.Task.(mapTask); ok {
-		nReduce = mt.NReduce
-		taskNum = mt.TaskNumber
-
-		file, err := os.Open(mt.FileName)
-		if err != nil {
-			log.Fatalf("cannot open %v", mt.FileName)
+	for {
+		_, allDoneResponse := CheckDone(workerId)
+		if allDoneResponse.Success {
+			log.Printf("All tasks done, worker %d exiting", workerId)
+			break
 		}
-		content, err := io.ReadAll(file)
-		if err != nil {
-			log.Fatalf("cannot read %v", mt.FileName)
-		}
-		file.Close()
-		kva := mapf(mt.FileName, string(content))
-		intermediate = append(intermediate, kva...)
-	}
 
-	// loop thru k,v pairs and write
-	fileDescriptors := make(map[int]*os.File)
-	fileNames := []string{}
+		_, myTask := GetTask(workerId)
+		log.Print("Got task")
 
-	for _, kv := range intermediate {
-		reduceNumber := ihash(kv.Key) % nReduce
-		filename := fmt.Sprintf("mr-%d-%d", taskNum, reduceNumber)
-		fileNames = append(fileNames, filename)
+		if mt, ok := myTask.Task.(mapTask); ok {
+			nReduce = mt.NReduce
+			taskNum = mt.TaskNumber
 
-		if _, ok := fileDescriptors[reduceNumber]; !ok {
-			file, err := os.Create(filename)
+			file, err := os.Open(mt.FileName)
 			if err != nil {
-				log.Fatalf("cannot create %v", filename)
+				log.Fatalf("cannot open %v", mt.FileName)
 			}
-			fileDescriptors[reduceNumber] = file
+			content, err := io.ReadAll(file)
+			if err != nil {
+				log.Fatalf("cannot read %v", mt.FileName)
+			}
+			file.Close()
+			kva := mapf(mt.FileName, string(content))
+			intermediate = append(intermediate, kva...)
 		}
 
-		// Write the key-value pair to the appropriate file
-		enc := json.NewEncoder(fileDescriptors[reduceNumber])
-		err := enc.Encode(&kv)
-		if err != nil {
-			fmt.Println("Error writing to file:", err)
-			return
-		}
-	}
-	// Close all the files
-	for _, file := range fileDescriptors {
-		err := file.Close()
-		if err != nil {
-			fmt.Println("Error closing file:", err)
-		}
-	}
-	log.Print("Finished writing files")
-	// call coordinator to say done and send filenames
-	_, done := DoneTask(workerId, taskNum, fileNames)
+		// loop thru k,v pairs and write
+		fileDescriptors := make(map[int]*os.File)
+		fileNames := []string{}
 
-	if !done.Success {
-		log.Print("Task not done")
+		for _, kv := range intermediate {
+			reduceNumber := ihash(kv.Key) % nReduce
+			filename := fmt.Sprintf("mr-%d-%d", taskNum, reduceNumber)
+			fileNames = append(fileNames, filename)
+
+			if _, ok := fileDescriptors[reduceNumber]; !ok {
+				file, err := os.Create(filename)
+				if err != nil {
+					log.Fatalf("cannot create %v", filename)
+				}
+				fileDescriptors[reduceNumber] = file
+			}
+
+			// Write the key-value pair to the appropriate file
+			enc := json.NewEncoder(fileDescriptors[reduceNumber])
+			err := enc.Encode(&kv)
+			if err != nil {
+				fmt.Println("Error writing to file:", err)
+				return
+			}
+		}
+		// Close all the files
+		for _, file := range fileDescriptors {
+			err := file.Close()
+			if err != nil {
+				fmt.Println("Error closing file:", err)
+			}
+		}
+		log.Print("Finished writing files")
+		// call coordinator to say done and send filenames
+		_, done := DoneTask(workerId, taskNum, fileNames)
+
+		if !done.Success {
+			log.Print("Task not done")
+		}
+		log.Printf("Worker % d done, waiting for next task", workerId)
 	}
-	log.Printf("Worker % d done, waiting for next task", workerId)
 }
 
 func GetTask(id int) (bool, TaskResponse) {
@@ -115,34 +123,13 @@ func DoneTask(id int, taskNum int, filenames []string) (bool, TaskDoneResponse) 
 	return ok, reply
 }
 
-//
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
+func CheckDone(id int) (bool, AllDoneResponse) {
+	args := AllDoneRequest{WorkerID: id}
+	reply := AllDoneResponse{}
+	log.Print("Checking if all tasks are done")
+	ok := call("Coordinator.AllDone", &args, &reply)
+	// TODO add some error handling probably
+	return ok, reply
 }
 
 // send an RPC request to the coordinator, wait for the response.
