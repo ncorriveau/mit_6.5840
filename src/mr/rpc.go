@@ -34,6 +34,16 @@ type TaskResponse struct {
 	Task interface{}
 }
 
+type TaskDoneRequest struct {
+	WorkerID       int    // pid of worker process
+	TaskNumber     int    // task number
+	OutputFilenames []string // file location of intermediate outputs
+}
+
+type TaskDoneResponse struct {
+	Success bool
+}
+
 type mapTask struct {
 	FileName       string // file name
 	TaskNumber     int    // task number

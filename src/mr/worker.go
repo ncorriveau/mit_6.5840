@@ -30,13 +30,12 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	// loop and ask for tasks from the coordinator
 	// and execute them
 	// save down and alert to coordinator when done
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
 
 	var nReduce, taskNum int
-
+	workerId := os.Getpid()
 	intermediate := []KeyValue{}
-	_, myTask := GetTask(1)
+
+	_, myTask := GetTask(workerId)
 	log.Print("Got task")
 
 	if mt, ok := myTask.Task.(mapTask); ok {
@@ -58,9 +57,12 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 	// loop thru k,v pairs and write
 	fileDescriptors := make(map[int]*os.File)
+	fileNames := []string{}
+
 	for _, kv := range intermediate {
 		reduceNumber := ihash(kv.Key) % nReduce
 		filename := fmt.Sprintf("mr-%d-%d", taskNum, reduceNumber)
+		fileNames = append(fileNames, filename)
 
 		if _, ok := fileDescriptors[reduceNumber]; !ok {
 			file, err := os.Create(filename)
@@ -86,8 +88,13 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		}
 	}
 	log.Print("Finished writing files")
-	// call coordinator to say done and send filename
+	// call coordinator to say done and send filenames
+	_, done := DoneTask(workerId, taskNum, fileNames)
 
+	if !done.Success {
+		log.Print("Task not done")
+	}
+	log.Printf("Worker % d done, waiting for next task", workerId)
 }
 
 func GetTask(id int) (bool, TaskResponse) {
@@ -95,6 +102,15 @@ func GetTask(id int) (bool, TaskResponse) {
 	reply := TaskResponse{} // set with default values
 	log.Print("Calling Coordinator.AssignTask")
 	ok := call("Coordinator.AssignTask", &args, &reply)
+	// TODO add some error handling probably
+	return ok, reply
+}
+
+func DoneTask(id int, taskNum int, filenames []string) (bool, TaskDoneResponse) {
+	args := TaskDoneRequest{WorkerID: id, TaskNumber: taskNum, OutputFilenames: filenames}
+	reply := TaskDoneResponse{}
+	log.Print("Calling Coordinator.TaskDone")
+	ok := call("Coordinator.TaskDone", &args, &reply)
 	// TODO add some error handling probably
 	return ok, reply
 }

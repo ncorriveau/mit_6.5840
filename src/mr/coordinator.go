@@ -14,7 +14,6 @@ type Coordinator struct {
 	ReduceTasks []reduceTask
 	mapDone     int // number of map tasks completed
 	reduceDone  int // number of reduce tasks completed
-
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -47,6 +46,19 @@ func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 			c.ReduceTasks[i].Worker = args.WorkerID
 			c.ReduceTasks[i].StartTime = 0
 			reply.Task = task
+			return nil
+		}
+	}
+	return nil
+}
+
+func (c *Coordinator) TaskDone(args *TaskDoneRequest, reply *TaskDoneResponse) error {
+	for i, task := range c.MapTasks {
+		if task.TaskNumber == args.TaskNumber {
+			c.MapTasks[i].Status = "completed"
+			c.mapDone++
+			reply.Success = true
+			log.Printf("Tasks completed: %d", c.mapDone)
 			return nil
 		}
 	}
