@@ -12,8 +12,10 @@ type Coordinator struct {
 	// Your definitions here.
 	MapTasks    []mapTask
 	ReduceTasks []reduceTask
-	mapDone     int // number of map tasks completed
-	reduceDone  int // number of reduce tasks completed
+	// TODO: figure out how to add in intermediate files
+	IntermediateFiles []string
+	mapDone           int // number of map tasks completed
+	reduceDone        int // number of reduce tasks completed
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -31,20 +33,25 @@ func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 	// if there are no tasks left, return an error
 	// else return the task
 	log.Printf("Assigning task to worker %d", args.WorkerID)
-	for i, task := range c.MapTasks {
-		if task.Status == "idle" {
-			c.MapTasks[i].Status = "in-progress"
-			c.MapTasks[i].Worker = args.WorkerID
-			reply.Task = task
-			return nil
+	if c.mapDone != len(c.MapTasks) {
+		for i, task := range c.MapTasks {
+			if task.Status == "idle" {
+				c.MapTasks[i].Status = "in-progress"
+				c.MapTasks[i].Worker = args.WorkerID
+				reply.Task = task
+				return nil
+			}
 		}
-	}
-	for i, task := range c.ReduceTasks {
-		if task.Status == "idle" {
-			c.ReduceTasks[i].Status = "in-progress"
-			c.ReduceTasks[i].Worker = args.WorkerID
-			reply.Task = task
-			return nil
+	} else {
+		for i, task := range c.ReduceTasks {
+			if task.Status == "idle" {
+				c.ReduceTasks[i].Status = "in-progress"
+				c.ReduceTasks[i].Worker = args.WorkerID
+				c.ReduceTasks[i].IntermediateFiles = c.IntermediateFiles
+				reply.Task = task
+
+				return nil
+			}
 		}
 	}
 	return nil
@@ -54,6 +61,10 @@ func (c *Coordinator) TaskDone(args *TaskDoneRequest, reply *TaskDoneResponse) e
 	for i, task := range c.MapTasks {
 		if task.TaskNumber == args.TaskNumber {
 			c.MapTasks[i].Status = "completed"
+			// record all output file locations on the coordinator
+			for _, file := range args.OutputFilenames {
+				c.IntermediateFiles = append(c.IntermediateFiles, file)
+			}
 			c.mapDone++
 			reply.Success = true
 			log.Printf("Tasks completed: %d", c.mapDone)
@@ -64,7 +75,7 @@ func (c *Coordinator) TaskDone(args *TaskDoneRequest, reply *TaskDoneResponse) e
 }
 
 func (c *Coordinator) AllDone(args *AllDoneRequest, reply *AllDoneResponse) error {
-	if c.mapDone == len(c.MapTasks) {
+	if c.mapDone == len(c.MapTasks) && c.reduceDone == len(c.ReduceTasks) {
 		reply.Success = true
 	}
 	return nil
@@ -92,11 +103,7 @@ func (c *Coordinator) Done() bool {
 	// Your code here.
 	// for right now we will just use numer of map tasks
 	// TODO: add in reduce tasks
-	log.Printf("Checking if all tasks done")
-	log.Printf("Map tasks: %d", len(c.MapTasks))
-	log.Printf("Map done: %d", c.mapDone)
-
-	if c.mapDone == len(c.MapTasks) {
+	if c.mapDone == len(c.MapTasks) && c.reduceDone == len(c.ReduceTasks) {
 		ret = true
 	}
 
@@ -114,6 +121,14 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			FileName:   file,
 			TaskNumber: i,
 			NReduce:    nReduce,
+			Status:     "idle",
+			Worker:     0,
+		})
+	}
+
+	for i := 0; i < nReduce; i++ {
+		c.ReduceTasks = append(c.ReduceTasks, reduceTask{
+			TaskNumber: i,
 			Status:     "idle",
 			Worker:     0,
 		})

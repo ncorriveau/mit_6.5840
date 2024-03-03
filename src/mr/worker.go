@@ -8,6 +8,9 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 // Map functions return a slice of KeyValue.
@@ -15,6 +18,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// HELPERS //
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -43,7 +54,6 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		}
 
 		_, myTask := GetTask(workerId)
-		log.Print("Got task")
 
 		if mt, ok := myTask.Task.(mapTask); ok {
 			nReduce = mt.NReduce
@@ -60,48 +70,98 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			file.Close()
 			kva := mapf(mt.FileName, string(content))
 			intermediate = append(intermediate, kva...)
-		}
 
-		// loop thru k,v pairs and write
-		fileDescriptors := make(map[int]*os.File)
-		fileNames := []string{}
+			// loop thru k,v pairs and write
+			fileDescriptors := make(map[int]*os.File)
+			fileNames := []string{}
 
-		for _, kv := range intermediate {
-			reduceNumber := ihash(kv.Key) % nReduce
-			filename := fmt.Sprintf("mr-%d-%d", taskNum, reduceNumber)
-			fileNames = append(fileNames, filename)
+			for _, kv := range intermediate {
+				reduceNumber := ihash(kv.Key) % nReduce
+				filename := fmt.Sprintf("mr-%d-%d", taskNum, reduceNumber)
+				fileNames = append(fileNames, filename)
 
-			if _, ok := fileDescriptors[reduceNumber]; !ok {
-				file, err := os.Create(filename)
-				if err != nil {
-					log.Fatalf("cannot create %v", filename)
+				if _, ok := fileDescriptors[reduceNumber]; !ok {
+					file, err := os.Create(filename)
+					if err != nil {
+						log.Fatalf("cannot create %v", filename)
+					}
+					fileDescriptors[reduceNumber] = file
 				}
-				fileDescriptors[reduceNumber] = file
+
+				// Write the key-value pair to the appropriate file
+				enc := json.NewEncoder(fileDescriptors[reduceNumber])
+				err := enc.Encode(&kv)
+				if err != nil {
+					fmt.Println("Error writing to file:", err)
+					return
+				}
+			}
+			// Close all the files
+			for _, file := range fileDescriptors {
+				err := file.Close()
+				if err != nil {
+					fmt.Println("Error closing file:", err)
+				}
+			}
+			log.Print("Finished writing files")
+			// call coordinator to say done and send filenames
+			_, done := DoneTask(workerId, taskNum, fileNames)
+
+			if !done.Success {
+				log.Print("Task not done")
+			}
+			log.Printf("Worker % d done, waiting for next task", workerId)
+		} else if rt, ok := myTask.Task.(reduceTask); ok {
+			log.Printf("Starting Reduce task %d", rt.TaskNumber)
+			// read in all the intermediate files for this reduce task
+			// add all files to a slice we can then sort
+			var kva []KeyValue
+			strTaskNum := strconv.Itoa(rt.TaskNumber)
+
+			for _, filename := range rt.IntermediateFiles {
+				if strings.Contains(filename, strTaskNum) {
+					log.Printf("Reading file: %s", filename)
+					file, err := os.Open(filename)
+					if err != nil {
+						log.Fatalf("cannot open %v", filename)
+					}
+
+					dec := json.NewDecoder(file)
+					for {
+						var kv KeyValue
+						if err := dec.Decode(&kv); err != nil {
+							break
+						}
+						kva = append(kva, kv)
+					}
+				}
 			}
 
-			// Write the key-value pair to the appropriate file
-			enc := json.NewEncoder(fileDescriptors[reduceNumber])
-			err := enc.Encode(&kv)
-			if err != nil {
-				fmt.Println("Error writing to file:", err)
-				return
-			}
-		}
-		// Close all the files
-		for _, file := range fileDescriptors {
-			err := file.Close()
-			if err != nil {
-				fmt.Println("Error closing file:", err)
-			}
-		}
-		log.Print("Finished writing files")
-		// call coordinator to say done and send filenames
-		_, done := DoneTask(workerId, taskNum, fileNames)
+			// sort intermediate key-value pairs and create output file
+			sort.Sort(ByKey(kva))
+			oname := fmt.Sprintf("mr-out-%d", rt.TaskNumber)
+			ofile, _ := os.Create(oname)
+			i := 0
+			for i < len(kva) {
+				j := i + 1
+				for j < len(kva) && kva[j].Key == kva[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, kva[k].Value)
+				}
+				output := reducef(kva[i].Key, values)
 
-		if !done.Success {
-			log.Print("Task not done")
+				// this is the correct format for each line of Reduce output.
+				fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
+
+				i = j
+			}
+
+			ofile.Close()
+
 		}
-		log.Printf("Worker % d done, waiting for next task", workerId)
 	}
 }
 
