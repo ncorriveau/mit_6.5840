@@ -47,7 +47,7 @@ func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 			if task.Status == "idle" {
 				c.ReduceTasks[i].Status = "in-progress"
 				c.ReduceTasks[i].Worker = args.WorkerID
-				c.ReduceTasks[i].IntermediateFiles = c.IntermediateFiles
+				task.IntermediateFiles = c.IntermediateFiles
 				reply.Task = task
 
 				return nil
@@ -58,17 +58,29 @@ func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 }
 
 func (c *Coordinator) TaskDone(args *TaskDoneRequest, reply *TaskDoneResponse) error {
-	for i, task := range c.MapTasks {
-		if task.TaskNumber == args.TaskNumber {
-			c.MapTasks[i].Status = "completed"
-			// record all output file locations on the coordinator
-			for _, file := range args.OutputFilenames {
-				c.IntermediateFiles = append(c.IntermediateFiles, file)
+	if args.TaskType == "map" {
+		for i, task := range c.MapTasks {
+			if task.TaskNumber == args.TaskNumber {
+				c.MapTasks[i].Status = "completed"
+				// record all output file locations on the coordinator
+				for _, file := range args.OutputFilenames {
+					c.IntermediateFiles = append(c.IntermediateFiles, file)
+				}
+				c.mapDone++
+				reply.Success = true
+				log.Printf("Task completed: %d", c.mapDone)
+				return nil
 			}
-			c.mapDone++
-			reply.Success = true
-			log.Printf("Tasks completed: %d", c.mapDone)
-			return nil
+		}
+	} else if args.TaskType == "reduce" {
+		for i, task := range c.ReduceTasks {
+			if task.TaskNumber == args.TaskNumber {
+				c.ReduceTasks[i].Status = "completed"
+				c.reduceDone++
+				reply.Success = true
+				log.Printf("Task completed: %d", c.reduceDone)
+				return nil
+			}
 		}
 	}
 	return nil

@@ -36,6 +36,7 @@ type TaskResponse struct {
 
 type TaskDoneRequest struct {
 	WorkerID        int      // pid of worker process
+	TaskType        string   // 'map' or 'reduce'
 	TaskNumber      int      // task number
 	OutputFilenames []string // file location of intermediate outputs
 }
@@ -62,10 +63,10 @@ type mapTask struct {
 }
 
 type reduceTask struct {
-	IntermediateFiles   []string // file name
-	TaskNumber 			int    // task number
-	Status     			string // 'idle', 'in-progress', 'completed'
-	Worker     			int    // pid of worker process handling. 0 if not assigned
+	IntermediateFiles []string // file name
+	TaskNumber        int      // task number
+	Status            string   // 'idle', 'in-progress', 'completed'
+	Worker            int      // pid of worker process handling. 0 if not assigned
 }
 
 // Cook up a unique-ish UNIX-domain socket name

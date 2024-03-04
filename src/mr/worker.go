@@ -73,14 +73,16 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 			// loop thru k,v pairs and write
 			fileDescriptors := make(map[int]*os.File)
+			fileSet := make(map[string]bool)
 			fileNames := []string{}
 
 			for _, kv := range intermediate {
 				reduceNumber := ihash(kv.Key) % nReduce
 				filename := fmt.Sprintf("mr-%d-%d", taskNum, reduceNumber)
-				fileNames = append(fileNames, filename)
+				if _, ok := fileSet[filename]; !ok {
+					fileSet[filename] = true
+					fileNames = append(fileNames, filename)
 
-				if _, ok := fileDescriptors[reduceNumber]; !ok {
 					file, err := os.Create(filename)
 					if err != nil {
 						log.Fatalf("cannot create %v", filename)
@@ -88,6 +90,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 					fileDescriptors[reduceNumber] = file
 				}
 
+				defer fileDescriptors[reduceNumber].Close()
 				// Write the key-value pair to the appropriate file
 				enc := json.NewEncoder(fileDescriptors[reduceNumber])
 				err := enc.Encode(&kv)
@@ -96,35 +99,29 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 					return
 				}
 			}
-			// Close all the files
-			for _, file := range fileDescriptors {
-				err := file.Close()
-				if err != nil {
-					fmt.Println("Error closing file:", err)
-				}
-			}
 			log.Print("Finished writing files")
 			// call coordinator to say done and send filenames
-			_, done := DoneTask(workerId, taskNum, fileNames)
+			_, done := DoneTask(workerId, "map", taskNum, fileNames)
 
 			if !done.Success {
 				log.Print("Task not done")
 			}
-			log.Printf("Worker % d done, waiting for next task", workerId)
+			log.Printf("Worker % d map task done, waiting for next task", workerId)
 		} else if rt, ok := myTask.Task.(reduceTask); ok {
 			log.Printf("Starting Reduce task %d", rt.TaskNumber)
 			// read in all the intermediate files for this reduce task
 			// add all files to a slice we can then sort
 			var kva []KeyValue
 			strTaskNum := strconv.Itoa(rt.TaskNumber)
+			log.Printf("Reading from %d intermediate files", len(rt.IntermediateFiles))
 
 			for _, filename := range rt.IntermediateFiles {
 				if strings.Contains(filename, strTaskNum) {
-					log.Printf("Reading file: %s", filename)
 					file, err := os.Open(filename)
 					if err != nil {
 						log.Fatalf("cannot open %v", filename)
 					}
+					defer file.Close()
 
 					dec := json.NewDecoder(file)
 					for {
@@ -138,9 +135,11 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			}
 
 			// sort intermediate key-value pairs and create output file
+			log.Printf("Sorting %d key-value pairs", len(kva))
 			sort.Sort(ByKey(kva))
 			oname := fmt.Sprintf("mr-out-%d", rt.TaskNumber)
 			ofile, _ := os.Create(oname)
+			defer ofile.Close()
 			i := 0
 			for i < len(kva) {
 				j := i + 1
@@ -154,13 +153,16 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 				output := reducef(kva[i].Key, values)
 
 				// this is the correct format for each line of Reduce output.
+				log.Printf("Writing to file: %s", oname)
 				fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
-
 				i = j
 			}
-
-			ofile.Close()
-
+			//TODO: SEND DONE TO COORDINATOR
+			_, done := DoneTask(workerId, "reduce", rt.TaskNumber, []string{oname})
+			if !done.Success {
+				log.Print("Task not done")
+			}
+			log.Printf("Worker % d reduce task done, waiting for next task", workerId)
 		}
 	}
 }
@@ -174,8 +176,8 @@ func GetTask(id int) (bool, TaskResponse) {
 	return ok, reply
 }
 
-func DoneTask(id int, taskNum int, filenames []string) (bool, TaskDoneResponse) {
-	args := TaskDoneRequest{WorkerID: id, TaskNumber: taskNum, OutputFilenames: filenames}
+func DoneTask(id int, taskType string, taskNum int, filenames []string) (bool, TaskDoneResponse) {
+	args := TaskDoneRequest{WorkerID: id, TaskType: taskType, TaskNumber: taskNum, OutputFilenames: filenames}
 	reply := TaskDoneResponse{}
 	log.Print("Calling Coordinator.TaskDone")
 	ok := call("Coordinator.TaskDone", &args, &reply)
