@@ -6,16 +6,17 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 )
 
 type Coordinator struct {
 	// Your definitions here.
-	MapTasks    []mapTask
-	ReduceTasks []reduceTask
-	// TODO: figure out how to add in intermediate files
+	MapTasks          []mapTask
+	ReduceTasks       []reduceTask
 	IntermediateFiles []string
 	mapDone           int // number of map tasks completed
 	reduceDone        int // number of reduce tasks completed
+	mu                sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -29,10 +30,11 @@ type Coordinator struct {
 // }
 
 func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
-	// assign a task to the worker
-	// if there are no tasks left, return an error
-	// else return the task
-	log.Printf("Assigning task to worker %d", args.WorkerID)
+	// log.Printf("Assigning task to worker %d", args.WorkerID)
+	// lock given shared structures
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.mapDone != len(c.MapTasks) {
 		for i, task := range c.MapTasks {
 			if task.Status == "idle" {
@@ -58,6 +60,9 @@ func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 }
 
 func (c *Coordinator) TaskDone(args *TaskDoneRequest, reply *TaskDoneResponse) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if args.TaskType == "map" {
 		for i, task := range c.MapTasks {
 			if task.TaskNumber == args.TaskNumber {
@@ -111,10 +116,6 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
 	ret := false
-
-	// Your code here.
-	// for right now we will just use numer of map tasks
-	// TODO: add in reduce tasks
 	if c.mapDone == len(c.MapTasks) && c.reduceDone == len(c.ReduceTasks) {
 		ret = true
 	}

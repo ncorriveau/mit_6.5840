@@ -8,9 +8,9 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
-	"strings"
 )
 
 // Map functions return a slice of KeyValue.
@@ -72,32 +72,33 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			intermediate = append(intermediate, kva...)
 
 			// loop thru k,v pairs and write
-			fileDescriptors := make(map[int]*os.File)
-			fileSet := make(map[string]bool)
+			// fileDescriptors := make(map[int]*os.File)
+			// fileSet := make(map[string]bool)
 			fileNames := []string{}
+			kvsByReduceTask := make(map[int][]KeyValue)
 
 			for _, kv := range intermediate {
 				reduceNumber := ihash(kv.Key) % nReduce
+				kvsByReduceTask[reduceNumber] = append(kvsByReduceTask[reduceNumber], kv)
+			}
+
+			for reduceNumber, kvs := range kvsByReduceTask {
 				filename := fmt.Sprintf("mr-%d-%d", taskNum, reduceNumber)
-				if _, ok := fileSet[filename]; !ok {
-					fileSet[filename] = true
-					fileNames = append(fileNames, filename)
-
-					file, err := os.Create(filename)
-					if err != nil {
-						log.Fatalf("cannot create %v", filename)
-					}
-					fileDescriptors[reduceNumber] = file
-				}
-
-				defer fileDescriptors[reduceNumber].Close()
-				// Write the key-value pair to the appropriate file
-				enc := json.NewEncoder(fileDescriptors[reduceNumber])
-				err := enc.Encode(&kv)
+				file, err := os.Create(filename)
 				if err != nil {
-					fmt.Println("Error writing to file:", err)
-					return
+					log.Fatalf("cannot create %v", filename)
 				}
+
+				// Ensure file is closed after writing
+				defer file.Close()
+
+				enc := json.NewEncoder(file)
+				for _, kv := range kvs {
+					if err := enc.Encode(&kv); err != nil {
+						log.Fatalf("Error encoding kv to file %s: %v", filename, err)
+					}
+				}
+				fileNames = append(fileNames, filename)
 			}
 			log.Print("Finished writing files")
 			// call coordinator to say done and send filenames
@@ -113,10 +114,11 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			// add all files to a slice we can then sort
 			var kva []KeyValue
 			strTaskNum := strconv.Itoa(rt.TaskNumber)
-			log.Printf("Reading from %d intermediate files", len(rt.IntermediateFiles))
+			re := regexp.MustCompile(`mr-\d+-` + regexp.QuoteMeta(strTaskNum) + `$`)
 
 			for _, filename := range rt.IntermediateFiles {
-				if strings.Contains(filename, strTaskNum) {
+				if re.MatchString(filename) {
+					log.Printf("Reading file %s for task num %d", filename, rt.TaskNumber)
 					file, err := os.Open(filename)
 					if err != nil {
 						log.Fatalf("cannot open %v", filename)
@@ -135,7 +137,6 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			}
 
 			// sort intermediate key-value pairs and create output file
-			log.Printf("Sorting %d key-value pairs", len(kva))
 			sort.Sort(ByKey(kva))
 			oname := fmt.Sprintf("mr-out-%d", rt.TaskNumber)
 			ofile, _ := os.Create(oname)
@@ -153,11 +154,9 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 				output := reducef(kva[i].Key, values)
 
 				// this is the correct format for each line of Reduce output.
-				log.Printf("Writing to file: %s", oname)
 				fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
 				i = j
 			}
-			//TODO: SEND DONE TO COORDINATOR
 			_, done := DoneTask(workerId, "reduce", rt.TaskNumber, []string{oname})
 			if !done.Success {
 				log.Print("Task not done")
