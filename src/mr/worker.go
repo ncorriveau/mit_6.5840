@@ -35,17 +35,136 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+func executeMapTask(task Task, mapf func(string, string) []KeyValue) {
+	filename := task.Filenames[0]
+	intermediate := []KeyValue{}
+
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	file.Close()
+
+	kva := mapf(filename, string(content))
+	intermediate = append(intermediate, kva...)
+
+	// loop thru k,v pairs and write
+	// fileDescriptors := make(map[int]*os.File)
+	// fileSet := make(map[string]bool)
+	intermediateFiles := make([]string, task.NReduce)
+	for i := 0; i < task.NReduce; i++ {
+		tempFile, err := os.CreateTemp("", fmt.Sprintf("mr-%d-%d-*", task.TaskNumber, i))
+		if err != nil {
+			log.Fatalf("cannot create temp file for reduce task %d", i)
+		}
+
+		enc := json.NewEncoder(tempFile)
+		for _, kv := range kva {
+			if ihash(kv.Key)%task.NReduce == i {
+				if err := enc.Encode(&kv); err != nil {
+					log.Fatalf("cannot encode kv: %v", err)
+				}
+			}
+		}
+
+		tempFile.Close()
+		finalFilename := fmt.Sprintf("mr-%d-%d", task.TaskNumber, i)
+		// Rename the temp file to the final filename
+		if err := os.Rename(tempFile.Name(), finalFilename); err != nil {
+			log.Fatalf("cannot rename temp file: %v", err)
+		}
+
+		// Record the name of the final file
+		intermediateFiles[i] = finalFilename
+
+	}
+	log.Print("Finished writing files")
+
+	// call coordinator to say done and send filenames
+	_, done := DoneTask(task, intermediateFiles)
+
+	if !done.Success {
+		log.Print("Task not done")
+	}
+	log.Printf("Map task % d done, waiting for next task", task.TaskNumber)
+}
+
+func executeReduceTask(task Task, reducef func(string, []string) string) {
+	// read in all the intermediate files for this reduce task
+	// add all k,v pairs to a slice we can then sort
+	var kva []KeyValue
+	strTaskNum := strconv.Itoa(task.TaskNumber)
+	re := regexp.MustCompile(`mr-\d+-` + regexp.QuoteMeta(strTaskNum) + `$`)
+
+	// extract file names that end in the task number
+	for _, filename := range task.Filenames {
+		if re.MatchString(filename) {
+			file, err := os.Open(filename)
+			if err != nil {
+				log.Fatalf("cannot open %v", filename)
+			}
+
+			dec := json.NewDecoder(file)
+			for {
+				var kv KeyValue
+				if err := dec.Decode(&kv); err != nil {
+					break
+				}
+				kva = append(kva, kv)
+			}
+			file.Close()
+		}
+	}
+
+	// sort intermediate key-value pairs and create output file
+	sort.Sort(ByKey(kva))
+	oname := fmt.Sprintf("mr-out-%d", task.TaskNumber)
+
+	ofile, err := os.Create(oname)
+	if err != nil {
+		log.Fatalf("cannot create %v", oname)
+	}
+	defer ofile.Close()
+
+	i := 0
+	for i < len(kva) {
+		j := i + 1
+		for j < len(kva) && kva[j].Key == kva[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, kva[k].Value)
+		}
+		output := reducef(kva[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		_, err := fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
+		if err != nil {
+			log.Fatalf("error writing to %v: %v", oname, err)
+		}
+		i = j // Move to next group of keys
+
+	}
+	_, done := DoneTask(task, []string{oname})
+	if !done.Success {
+		log.Print("Task not done")
+	}
+	log.Printf("Reduce task % d done, waiting for next task", task.TaskNumber)
+}
+
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 	// Your worker implementation here.
 	// loop and ask for tasks from the coordinator
 	// and execute them
 	// save down and alert to coordinator when done
-
-	var nReduce, taskNum int
 	workerId := os.Getpid()
-	intermediate := []KeyValue{}
-
 	for {
 		_, allDoneResponse := CheckDone(workerId)
 		if allDoneResponse.Success {
@@ -55,113 +174,13 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 		_, myTask := GetTask(workerId)
 
-		if mt, ok := myTask.Task.(mapTask); ok {
-			nReduce = mt.NReduce
-			taskNum = mt.TaskNumber
+		if myTask.Task.TaskType == "map" {
+			log.Printf("Starting Map task %d", myTask.Task.TaskNumber)
+			executeMapTask(myTask.Task, mapf)
 
-			file, err := os.Open(mt.FileName)
-			if err != nil {
-				log.Fatalf("cannot open %v", mt.FileName)
-			}
-			content, err := io.ReadAll(file)
-			if err != nil {
-				log.Fatalf("cannot read %v", mt.FileName)
-			}
-			file.Close()
-			kva := mapf(mt.FileName, string(content))
-			intermediate = append(intermediate, kva...)
-
-			// loop thru k,v pairs and write
-			// fileDescriptors := make(map[int]*os.File)
-			// fileSet := make(map[string]bool)
-			fileNames := []string{}
-			kvsByReduceTask := make(map[int][]KeyValue)
-
-			for _, kv := range intermediate {
-				reduceNumber := ihash(kv.Key) % nReduce
-				kvsByReduceTask[reduceNumber] = append(kvsByReduceTask[reduceNumber], kv)
-			}
-
-			for reduceNumber, kvs := range kvsByReduceTask {
-				filename := fmt.Sprintf("mr-%d-%d", taskNum, reduceNumber)
-				file, err := os.Create(filename)
-				if err != nil {
-					log.Fatalf("cannot create %v", filename)
-				}
-
-				// Ensure file is closed after writing
-				defer file.Close()
-
-				enc := json.NewEncoder(file)
-				for _, kv := range kvs {
-					if err := enc.Encode(&kv); err != nil {
-						log.Fatalf("Error encoding kv to file %s: %v", filename, err)
-					}
-				}
-				fileNames = append(fileNames, filename)
-			}
-			log.Print("Finished writing files")
-			// call coordinator to say done and send filenames
-			_, done := DoneTask(workerId, "map", taskNum, fileNames)
-
-			if !done.Success {
-				log.Print("Task not done")
-			}
-			log.Printf("Worker % d map task done, waiting for next task", workerId)
-		} else if rt, ok := myTask.Task.(reduceTask); ok {
-			log.Printf("Starting Reduce task %d", rt.TaskNumber)
-			// read in all the intermediate files for this reduce task
-			// add all files to a slice we can then sort
-			var kva []KeyValue
-			strTaskNum := strconv.Itoa(rt.TaskNumber)
-			re := regexp.MustCompile(`mr-\d+-` + regexp.QuoteMeta(strTaskNum) + `$`)
-
-			for _, filename := range rt.IntermediateFiles {
-				if re.MatchString(filename) {
-					log.Printf("Reading file %s for task num %d", filename, rt.TaskNumber)
-					file, err := os.Open(filename)
-					if err != nil {
-						log.Fatalf("cannot open %v", filename)
-					}
-					defer file.Close()
-
-					dec := json.NewDecoder(file)
-					for {
-						var kv KeyValue
-						if err := dec.Decode(&kv); err != nil {
-							break
-						}
-						kva = append(kva, kv)
-					}
-				}
-			}
-
-			// sort intermediate key-value pairs and create output file
-			sort.Sort(ByKey(kva))
-			oname := fmt.Sprintf("mr-out-%d", rt.TaskNumber)
-			ofile, _ := os.Create(oname)
-			defer ofile.Close()
-			i := 0
-			for i < len(kva) {
-				j := i + 1
-				for j < len(kva) && kva[j].Key == kva[i].Key {
-					j++
-				}
-				values := []string{}
-				for k := i; k < j; k++ {
-					values = append(values, kva[k].Value)
-				}
-				output := reducef(kva[i].Key, values)
-
-				// this is the correct format for each line of Reduce output.
-				fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
-				i = j
-			}
-			_, done := DoneTask(workerId, "reduce", rt.TaskNumber, []string{oname})
-			if !done.Success {
-				log.Print("Task not done")
-			}
-			log.Printf("Worker % d reduce task done, waiting for next task", workerId)
+		} else if myTask.Task.TaskType == "reduce" {
+			log.Printf("Starting Reduce task %d", myTask.Task.TaskNumber)
+			executeReduceTask(myTask.Task, reducef)
 		}
 	}
 }
@@ -169,16 +188,15 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 func GetTask(id int) (bool, TaskResponse) {
 	args := TaskRequest{WorkerID: id}
 	reply := TaskResponse{} // set with default values
-	log.Print("Calling Coordinator.AssignTask")
+	// log.Print("Calling Coordinator.AssignTask")
 	ok := call("Coordinator.AssignTask", &args, &reply)
 	// TODO add some error handling probably
 	return ok, reply
 }
 
-func DoneTask(id int, taskType string, taskNum int, filenames []string) (bool, TaskDoneResponse) {
-	args := TaskDoneRequest{WorkerID: id, TaskType: taskType, TaskNumber: taskNum, OutputFilenames: filenames}
+func DoneTask(task Task, outputFiles []string) (bool, TaskDoneResponse) {
+	args := TaskDoneRequest{Task: task, OutputFilenames: outputFiles}
 	reply := TaskDoneResponse{}
-	log.Print("Calling Coordinator.TaskDone")
 	ok := call("Coordinator.TaskDone", &args, &reply)
 	// TODO add some error handling probably
 	return ok, reply
@@ -187,7 +205,6 @@ func DoneTask(id int, taskType string, taskNum int, filenames []string) (bool, T
 func CheckDone(id int) (bool, AllDoneResponse) {
 	args := AllDoneRequest{WorkerID: id}
 	reply := AllDoneResponse{}
-	log.Print("Checking if all tasks are done")
 	ok := call("Coordinator.AllDone", &args, &reply)
 	// TODO add some error handling probably
 	return ok, reply

@@ -11,23 +11,26 @@ import (
 
 type Coordinator struct {
 	// Your definitions here.
-	MapTasks          []mapTask
-	ReduceTasks       []reduceTask
-	IntermediateFiles []string
-	mapDone           int // number of map tasks completed
-	reduceDone        int // number of reduce tasks completed
+	MapTasks    []Task
+	ReduceTasks []Task
+
+	//TODO: add in the status struct here
+	mapTaskStatus    map[int]string
+	reduceTaskStatus map[int]string
+
+	//TODO: change this to map
+	IntermediateFiles []string // intermediate files for reduce tasks
+	mapDone           int      // number of map tasks completed
+	reduceDone        int      // number of reduce tasks completed
 	mu                sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
-
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-// func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-// 	reply.Y = args.X + 1
-// 	return nil
-// }
+func (c *Coordinator) getMapTaskStatus(taskNumber int) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mapTaskStatus[taskNumber]
+}
 
 func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 	// log.Printf("Assigning task to worker %d", args.WorkerID)
@@ -36,21 +39,22 @@ func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 	defer c.mu.Unlock()
 
 	if c.mapDone != len(c.MapTasks) {
-		for i, task := range c.MapTasks {
-			if task.Status == "idle" {
-				c.MapTasks[i].Status = "in-progress"
-				c.MapTasks[i].Worker = args.WorkerID
+		for _, task := range c.MapTasks {
+			if c.mapTaskStatus[task.TaskNumber] == "idle" {
+				c.mapTaskStatus[task.TaskNumber] = "in-progress"
 				reply.Task = task
+				// add task monitor
+
 				return nil
 			}
 		}
 	} else {
-		for i, task := range c.ReduceTasks {
-			if task.Status == "idle" {
-				c.ReduceTasks[i].Status = "in-progress"
-				c.ReduceTasks[i].Worker = args.WorkerID
-				task.IntermediateFiles = c.IntermediateFiles
+		for _, task := range c.ReduceTasks {
+			if c.reduceTaskStatus[task.TaskNumber] == "idle" {
+				c.reduceTaskStatus[task.TaskNumber] = "in-progress"
+				task.Filenames = c.IntermediateFiles
 				reply.Task = task
+				// add task monitor
 
 				return nil
 			}
@@ -63,30 +67,19 @@ func (c *Coordinator) TaskDone(args *TaskDoneRequest, reply *TaskDoneResponse) e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if args.TaskType == "map" {
-		for i, task := range c.MapTasks {
-			if task.TaskNumber == args.TaskNumber {
-				c.MapTasks[i].Status = "completed"
-				// record all output file locations on the coordinator
-				for _, file := range args.OutputFilenames {
-					c.IntermediateFiles = append(c.IntermediateFiles, file)
-				}
-				c.mapDone++
-				reply.Success = true
-				log.Printf("Task completed: %d", c.mapDone)
-				return nil
-			}
-		}
-	} else if args.TaskType == "reduce" {
-		for i, task := range c.ReduceTasks {
-			if task.TaskNumber == args.TaskNumber {
-				c.ReduceTasks[i].Status = "completed"
-				c.reduceDone++
-				reply.Success = true
-				log.Printf("Task completed: %d", c.reduceDone)
-				return nil
-			}
-		}
+	task := args.Task
+	if task.TaskType == "map" {
+		c.mapTaskStatus[task.TaskNumber] = "completed"
+		c.mapDone++
+		c.IntermediateFiles = append(c.IntermediateFiles, args.OutputFilenames...)
+		reply.Success = true
+		return nil
+
+	} else if task.TaskType == "reduce" {
+		c.reduceTaskStatus[task.TaskNumber] = "completed"
+		c.reduceDone++
+		reply.Success = true
+		return nil
 	}
 	return nil
 }
@@ -127,24 +120,25 @@ func (c *Coordinator) Done() bool {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{}
+	c := Coordinator{mapTaskStatus: make(map[int]string), reduceTaskStatus: make(map[int]string)}
 	// Your code here.
 	for i, file := range files {
-		c.MapTasks = append(c.MapTasks, mapTask{
-			FileName:   file,
+		c.MapTasks = append(c.MapTasks, Task{
+			Filenames:  []string{file},
 			TaskNumber: i,
 			NReduce:    nReduce,
-			Status:     "idle",
-			Worker:     0,
+			TaskType:   "map",
 		})
+		c.mapTaskStatus[i] = "idle"
 	}
 
 	for i := 0; i < nReduce; i++ {
-		c.ReduceTasks = append(c.ReduceTasks, reduceTask{
+		c.ReduceTasks = append(c.ReduceTasks, Task{
 			TaskNumber: i,
-			Status:     "idle",
-			Worker:     0,
+			NReduce:    nReduce,
+			TaskType:   "reduce",
 		})
+		c.reduceTaskStatus[i] = "idle"
 	}
 
 	c.server()

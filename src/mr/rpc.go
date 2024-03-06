@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"encoding/gob"
 	"os"
 	"strconv"
 )
@@ -12,21 +11,24 @@ import (
 // remember to capitalize all names.
 
 // Add your RPC definitions here.
+type Task struct {
+	Filenames  []string // Adjusted from Filename to Filenames
+	NReduce    int
+	TaskNumber int
+	TaskType   string // "map" or "reduce"
+}
+
 type TaskRequest struct {
 	WorkerID int
 }
 
 type TaskResponse struct {
-	Task interface{}
+	Task Task
 }
-
 type TaskDoneRequest struct {
-	WorkerID        int      // pid of worker process
-	TaskType        string   // 'map' or 'reduce'
-	TaskNumber      int      // task number
+	Task            Task
 	OutputFilenames []string // file location of intermediate outputs
 }
-
 type TaskDoneResponse struct {
 	Success bool
 }
@@ -39,22 +41,6 @@ type AllDoneResponse struct {
 	Success bool
 }
 
-type mapTask struct {
-	FileName   string // file name
-	TaskNumber int    // task number
-	NReduce    int    // number of reduce tasks
-	Status     string // 'idle', 'in-progress', 'completed'
-	Worker     int    // pid of worker process handling. 0 if not assigned
-	// potentiall add start time and end time
-}
-
-type reduceTask struct {
-	IntermediateFiles []string // file name
-	TaskNumber        int      // task number
-	Status            string   // 'idle', 'in-progress', 'completed'
-	Worker            int      // pid of worker process handling. 0 if not assigned
-}
-
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
 // Can't use the current directory since
@@ -63,9 +49,4 @@ func coordinatorSock() string {
 	s := "/var/tmp/5840-mr-"
 	s += strconv.Itoa(os.Getuid())
 	return s
-}
-
-func init() {
-	gob.Register(mapTask{})
-	gob.Register(reduceTask{})
 }
