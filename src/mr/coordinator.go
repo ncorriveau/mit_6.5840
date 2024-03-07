@@ -7,6 +7,7 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
 type Coordinator struct {
@@ -17,6 +18,8 @@ type Coordinator struct {
 	//TODO: add in the status struct here
 	mapTaskStatus    map[int]string
 	reduceTaskStatus map[int]string
+	mapStartTimes    map[int]time.Time
+	reduceStartTimes map[int]time.Time
 
 	//TODO: change this to map
 	IntermediateFiles []string // intermediate files for reduce tasks
@@ -42,9 +45,8 @@ func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 		for _, task := range c.MapTasks {
 			if c.mapTaskStatus[task.TaskNumber] == "idle" {
 				c.mapTaskStatus[task.TaskNumber] = "in-progress"
+				c.mapStartTimes[task.TaskNumber] = time.Now()
 				reply.Task = task
-				// add task monitor
-
 				return nil
 			}
 		}
@@ -52,6 +54,7 @@ func (c *Coordinator) AssignTask(args *TaskRequest, reply *TaskResponse) error {
 		for _, task := range c.ReduceTasks {
 			if c.reduceTaskStatus[task.TaskNumber] == "idle" {
 				c.reduceTaskStatus[task.TaskNumber] = "in-progress"
+				c.reduceStartTimes[task.TaskNumber] = time.Now()
 				task.Filenames = c.IntermediateFiles
 				reply.Task = task
 				// add task monitor
@@ -72,16 +75,46 @@ func (c *Coordinator) TaskDone(args *TaskDoneRequest, reply *TaskDoneResponse) e
 		c.mapTaskStatus[task.TaskNumber] = "completed"
 		c.mapDone++
 		c.IntermediateFiles = append(c.IntermediateFiles, args.OutputFilenames...)
+		delete(c.mapStartTimes, task.TaskNumber)
 		reply.Success = true
 		return nil
 
 	} else if task.TaskType == "reduce" {
 		c.reduceTaskStatus[task.TaskNumber] = "completed"
 		c.reduceDone++
+		delete(c.reduceStartTimes, task.TaskNumber)
 		reply.Success = true
 		return nil
 	}
 	return nil
+}
+
+func (c *Coordinator) MonitorTasks() {
+	for {
+		c.mu.Lock()
+		now := time.Now()
+		if c.mapDone != len(c.MapTasks) {
+			for taskID, startTime := range c.mapStartTimes {
+				if now.Sub(startTime) > 10*time.Second {
+					// log.Printf("Map Task %d has been running for more than 10 seconds", taskID)
+					c.mapTaskStatus[taskID] = "idle"
+					c.mapStartTimes[taskID] = time.Time{}
+				}
+			}
+		} else if c.reduceDone != len(c.ReduceTasks) {
+			for taskID, startTime := range c.reduceStartTimes {
+				if now.Sub(startTime) > 10*time.Second {
+					// log.Printf("Reduce task %d has been running for more than 10 seconds", taskID)
+					c.reduceTaskStatus[taskID] = "idle"
+					c.reduceStartTimes[taskID] = time.Time{}
+				}
+			}
+		}
+		c.mu.Unlock()
+
+		// Sleep for a bit before checking again
+		time.Sleep(1 * time.Second)
+	}
 }
 
 func (c *Coordinator) AllDone(args *AllDoneRequest, reply *AllDoneResponse) error {
@@ -120,7 +153,7 @@ func (c *Coordinator) Done() bool {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{mapTaskStatus: make(map[int]string), reduceTaskStatus: make(map[int]string)}
+	c := Coordinator{mapTaskStatus: make(map[int]string), reduceTaskStatus: make(map[int]string), mapStartTimes: make(map[int]time.Time), reduceStartTimes: make(map[int]time.Time)}
 	// Your code here.
 	for i, file := range files {
 		c.MapTasks = append(c.MapTasks, Task{
@@ -140,7 +173,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		})
 		c.reduceTaskStatus[i] = "idle"
 	}
-
+	go c.MonitorTasks()
 	c.server()
 	return &c
 }

@@ -158,7 +158,6 @@ func executeReduceTask(task Task, reducef func(string, []string) string) {
 	log.Printf("Reduce task % d done, waiting for next task", task.TaskNumber)
 }
 
-// main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 	// Your worker implementation here.
 	// loop and ask for tasks from the coordinator
